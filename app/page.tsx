@@ -65,10 +65,6 @@ export default function Home() {
     usedSocket.on("userLeave", (data) => {
       console.log("User left, player count:", data.playersCount);
       setNumUsers(data.playersCount);
-      if (role === "player") {
-        // If a player leaves, reset the game phase for players.
-        setGamePhase("waitingOdds");
-      }
     });
 
     // Tells players to set odds
@@ -103,7 +99,17 @@ export default function Home() {
     return () => {
       usedSocket.disconnect();
     };
-  }, []);
+  }, []); // Empty dependency array as we only want to run this once
+
+  // Handle player leaving when role changes
+  useEffect(() => {
+    if (role === "player" && socket) {
+      // If a player leaves, reset the game phase for players.
+      socket.on("userLeave", () => {
+        setGamePhase("waitingOdds");
+      });
+    }
+  }, [role, socket]);
 
   const handleJoin = () => {
     if (name.trim() !== "" && socket) {

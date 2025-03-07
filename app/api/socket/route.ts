@@ -13,7 +13,7 @@ function removeSocket(socketId: string) {
   spectators = spectators.filter((s) => s.socketId !== socketId);
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   // This is just a health check endpoint
   return NextResponse.json({ status: 'Socket.io server is running' });
 }
@@ -22,7 +22,7 @@ export function POST(request: NextRequest) {
   if (io) return NextResponse.json({ status: 'Socket server already running' });
 
   // Create socket.io server
-  // @ts-ignore - Next.js doesn't have proper types for this yet
+  // @ts-expect-error - Next.js doesn't have proper types for this yet
   const { socket, server } = request;
   
   if (!socket || !server) {
