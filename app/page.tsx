@@ -3,176 +3,133 @@
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { useState, useEffect, useCallback } from "react";
-import * as Ably from 'ably';
+import { supabase, EVENTS, GAME_CHANNEL, PLAYER_CHANNEL, GameState } from '@/lib/supabase';
 
 export default function Home() {
-  const [ably, setAbly] = useState<Ably.Realtime | null>(null);
-  const [_channel, setChannel] = useState<any>(null);
-  const [clientId, setClientId] = useState<string>('');
-  const [numUsers, setNumUsers] = useState(0);
-  const [role, setRole] = useState<"player" | "spectator" | "none">("none");
+  // Player state
+  const [playerId, setPlayerId] = useState<string>('');
   const [name, setName] = useState("");
   const [odds, setOdds] = useState("");
   const [guess, setGuess] = useState("");
-  const [gamePhase, setGamePhase] = useState("join"); // "join", "waitingOdds", "countdown", "guessing", "result", "spectate"
-  const [result, setResult] = useState<{
-    guess1?: number;
-    guess2?: number;
-    oddsWon?: boolean;
-    message?: string;
-  } | null>(null);
-  const [countdown, setCountdown] = useState(0);
+  const [role, setRole] = useState<"player" | "spectator" | "none">("none");
+  
+  // Game state
+  const [gameState, setGameState] = useState<GameState>({
+    players: [],
+    spectators: [],
+    phase: 'join',
+    countdown: 0,
+    result: null
+  });
+  
+  // UI state
   const [connectionStatus, setConnectionStatus] = useState("Connecting...");
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
-  // Initialize Ably connection
-  const initializeAbly = useCallback(async () => {
+  // Initialize Supabase realtime connection
+  const initializeSupabase = useCallback(async () => {
     try {
       setConnectionStatus("Connecting...");
       setConnectionError(null);
       
-      // Generate a unique client ID
-      const newClientId = 'pch-odds-app-' + Math.random().toString(36).substring(2, 15);
-      setClientId(newClientId);
+      // Generate a unique player ID
+      const newPlayerId = 'player-' + Math.random().toString(36).substring(2, 15);
+      setPlayerId(newPlayerId);
       
-      // Get token from our API
-      const tokenResponse = await fetch('/api/ably-token');
-      if (!tokenResponse.ok) {
-        const errorData = await tokenResponse.json();
-        setConnectionStatus("Failed to connect");
-        setConnectionError(`Token error: ${errorData.error || 'Unknown error'}`);
-        return;
+      // Subscribe to game state updates
+      const gameStateSubscription = supabase
+        .channel(GAME_CHANNEL)
+        .on('postgres_changes', { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: GAME_CHANNEL,
+          filter: `event=eq.${EVENTS.GAME_STATE_UPDATE}`
+        }, (payload) => {
+          console.log('Game state update:', payload.new.payload);
+          setGameState(payload.new.payload);
+        })
+        .subscribe((status) => {
+          console.log('Game channel status:', status);
+          if (status === 'SUBSCRIBED') {
+            setConnectionStatus("Connected");
+            setConnectionError(null);
+          } else if (status === 'CHANNEL_ERROR') {
+            setConnectionStatus("Connection error");
+            setConnectionError("Failed to connect to game channel");
+          }
+        });
+      
+      // Subscribe to player-specific updates
+      const playerSubscription = supabase
+        .channel(PLAYER_CHANNEL)
+        .on('postgres_changes', { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: PLAYER_CHANNEL,
+          filter: `payload->playerId=eq.${newPlayerId}`
+        }, (payload) => {
+          if (payload.new.event === EVENTS.ROLE_ASSIGNED) {
+            console.log('Role assigned:', payload.new.payload.role);
+            setRole(payload.new.payload.role);
+          }
+        })
+        .subscribe();
+      
+      // Fetch initial game state
+      const { data, error } = await supabase
+        .from(GAME_CHANNEL)
+        .select('payload')
+        .eq('event', EVENTS.GAME_STATE_UPDATE)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      
+      if (data && data.length > 0) {
+        setGameState(data[0].payload);
       }
       
-      const tokenData = await tokenResponse.json();
-      
-      // Initialize Ably with the token
-      const ablyInstance = new Ably.Realtime({ 
-        authCallback: (_, callback) => {
-          callback(null, tokenData);
-        },
-        clientId: newClientId
-      });
-      
-      // Set up connection state change handler
-      ablyInstance.connection.on('connected', () => {
-        console.log('Connected to Ably');
-        setConnectionStatus("Connected");
-        setConnectionError(null);
-      });
-      
-      ablyInstance.connection.on('failed', (err) => {
-        console.error('Ably connection failed:', err);
-        setConnectionStatus("Connection failed");
-        setConnectionError(err.message || 'Connection failed');
-      });
-      
-      ablyInstance.connection.on('disconnected', () => {
-        console.log('Disconnected from Ably');
-        setConnectionStatus("Disconnected");
-      });
-      
-      // Subscribe to the game channel
-      const gameChannel = ablyInstance.channels.get('game-channel');
-      
-      // Set up event handlers
-      gameChannel.subscribe('role', (message) => {
-        // Only process messages intended for this client
-        if (message.data.clientId === newClientId) {
-          console.log("Assigned role:", message.data.role);
-          setRole(message.data.role);
-          if (message.data.role === "player") {
-            setGamePhase("waitingOdds");
-          } else {
-            setGamePhase("spectate");
-          }
-        }
-      });
-      
-      gameChannel.subscribe('userJoin', (message) => {
-        console.log("User joined, player count:", message.data.playersCount);
-        setNumUsers(message.data.playersCount);
-      });
-      
-      gameChannel.subscribe('userLeave', (message) => {
-        console.log("User left, player count:", message.data.playersCount);
-        setNumUsers(message.data.playersCount);
-      });
-      
-      gameChannel.subscribe('waitingForOdds', (message) => {
-        console.log("Waiting for odds:", message.data.message);
-        setGamePhase("waitingOdds");
-      });
-      
-      gameChannel.subscribe('startTimer', (message) => {
-        console.log("Starting countdown:", message.data.countdown);
-        setCountdown(message.data.countdown);
-        setGamePhase("countdown");
-      });
-      
-      gameChannel.subscribe('timerEnded', (message) => {
-        console.log("Timer ended, time to guess:", message.data.message);
-        setGamePhase("guessing");
-      });
-      
-      gameChannel.subscribe('gameResult', (message) => {
-        console.log("Game result received:", message.data);
-        setResult(message.data);
-        setGamePhase("result");
-      });
-      
-      setAbly(ablyInstance);
-      setChannel(gameChannel);
-      
+      // Return cleanup function
       return () => {
-        console.log("Cleaning up Ably connection");
-        gameChannel.unsubscribe();
-        ablyInstance.close();
+        gameStateSubscription.unsubscribe();
+        playerSubscription.unsubscribe();
       };
     } catch (error) {
-      console.error("Ably initialization error:", error);
+      console.error("Supabase initialization error:", error);
       setConnectionStatus("Failed to connect");
       setConnectionError(`${error}`);
       return undefined;
     }
   }, []);
 
-  // Initialize Ably on component mount
+  // Initialize Supabase on component mount
   useEffect(() => {
-    const cleanupFn = initializeAbly();
+    const cleanup = initializeSupabase();
     
     return () => {
-      Promise.resolve(cleanupFn).then(cleanup => {
-        if (typeof cleanup === 'function') {
-          cleanup();
-        }
-      });
+      if (cleanup) {
+        Promise.resolve(cleanup).then(fn => {
+          if (typeof fn === 'function') fn();
+        });
+      }
     };
-  }, [initializeAbly]);
+  }, [initializeSupabase]);
 
-  // Countdown timer (updates every second)
+  // Countdown timer
   useEffect(() => {
     let timer: NodeJS.Timeout;
-    if (gamePhase === "countdown" && countdown > 0) {
+    if (gameState.phase === 'countdown' && gameState.countdown > 0) {
       timer = setInterval(() => {
-        setCountdown((prev) => {
-          if (prev <= 1) {
-            clearInterval(timer);
-            return 0;
-          }
-          return prev - 1;
-        });
+        setGameState(prev => ({
+          ...prev,
+          countdown: prev.countdown - 1
+        }));
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [gamePhase, countdown]);
+  }, [gameState.phase, gameState.countdown]);
 
   // Handle reconnection
   const handleReconnect = () => {
-    if (ably) {
-      ably.close();
-    }
-    initializeAbly();
+    initializeSupabase();
   };
 
   // Game action handlers
@@ -183,14 +140,14 @@ export default function Home() {
     }
     
     try {
-      const response = await fetch('/api/game-state', {
+      const response = await fetch('/api/game', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           action,
-          clientId,
+          playerId,
           ...data
         }),
       });
@@ -237,7 +194,7 @@ export default function Home() {
           connectionStatus === "Connected" ? "bg-green-500" : 
           connectionStatus === "Connecting..." ? "bg-yellow-500" : "bg-red-500"
         }`}></div>
-        <span>Status: {connectionStatus} | Players: {numUsers}/2</span>
+        <span>Status: {connectionStatus} | Players: {gameState.players.length}/2</span>
       </div>
       {connectionError && (
         <div className="text-red-500 mt-1 text-xs">{connectionError}</div>
@@ -295,7 +252,7 @@ export default function Home() {
 
   const renderCountdown = () => (
     <div className="text-center">
-      <p className="text-2xl font-bold">Game starting in: {countdown} seconds</p>
+      <p className="text-2xl font-bold">Game starting in: {gameState.countdown} seconds</p>
       <p>Get ready to make your guess!</p>
     </div>
   );
@@ -323,12 +280,12 @@ export default function Home() {
   const renderResult = () => (
     <div className="flex flex-col gap-4 text-center">
       <p className="text-2xl font-bold">Game Result:</p>
-      <p>Player 1 Guess: {result?.guess1}</p>
-      <p>Player 2 Guess: {result?.guess2}</p>
+      <p>Player 1 Guess: {gameState.result?.guess1}</p>
+      <p>Player 2 Guess: {gameState.result?.guess2}</p>
       <p className="text-3xl font-bold mt-4">
-        {result?.oddsWon ? "ODDS WON! 🎉" : "ODDS LOST! 😢"}
+        {gameState.result?.oddsWon ? "ODDS WON! 🎉" : "ODDS LOST! 😢"}
       </p>
-      <p>{result?.message}</p>
+      <p>{gameState.result?.message}</p>
       <p className="mt-4 text-sm">Waiting for next round...</p>
     </div>
   );
@@ -336,7 +293,7 @@ export default function Home() {
   const renderSpectate = () => (
     <div className="text-center">
       <p className="text-xl">You are spectating. Waiting for game results...</p>
-      {gamePhase === "result" && renderResult()}
+      {gameState.phase === 'result' && renderResult()}
     </div>
   );
 
@@ -345,11 +302,11 @@ export default function Home() {
       <h1 className="text-3xl font-bold mb-4">PCH Odds Game</h1>
       {renderConnectionStatus()}
       
-      {gamePhase === "join" && renderJoin()}
-      {role === "player" && gamePhase === "waitingOdds" && renderWaitingOdds()}
-      {role === "player" && gamePhase === "countdown" && renderCountdown()}
-      {role === "player" && gamePhase === "guessing" && renderGuess()}
-      {role === "player" && gamePhase === "result" && renderResult()}
+      {gameState.phase === 'join' && role === 'none' && renderJoin()}
+      {role === "player" && gameState.phase === 'waitingOdds' && renderWaitingOdds()}
+      {role === "player" && gameState.phase === 'countdown' && renderCountdown()}
+      {role === "player" && gameState.phase === 'guessing' && renderGuess()}
+      {role === "player" && gameState.phase === 'result' && renderResult()}
       {role === "spectator" && renderSpectate()}
     </div>
   );
