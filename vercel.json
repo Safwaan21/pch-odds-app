@@ -4,7 +4,6 @@
   "outputDirectory": ".next",
   "installCommand": "npm install",
   "rewrites": [
-    { "source": "/api/socket", "destination": "/api/socket" },
     { "source": "/(.*)", "destination": "/" }
   ]
 } 
