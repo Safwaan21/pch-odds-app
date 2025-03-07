@@ -57,6 +57,10 @@ Before deploying to production, it's important to test your Supabase integration
    - Open http://localhost:3000 in two different browsers or incognito windows
    - Join as different players in each window
    - Follow the game flow to verify everything works
+   
+6. You can also use the test page to verify your Supabase connection:
+   - Open http://localhost:3000/test in your browser
+   - This page provides tools to test your Supabase connection and real-time functionality
 
 ## Troubleshooting
 
