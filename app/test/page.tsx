@@ -51,6 +51,7 @@ export default function TestPage() {
       
       const channel = supabase
         .channel('test-channel')
+        // @ts-expect-error - Supabase types are not up to date
         .on('postgres_changes', { 
           event: 'INSERT', 
           schema: 'public', 

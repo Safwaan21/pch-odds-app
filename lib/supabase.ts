@@ -4,8 +4,39 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
+// Validate Supabase URL
+const isValidUrl = (url: string) => {
+  try {
+    new URL(url);
+    return true;
+  } catch (_) {
+    return false;
+  }
+};
+
 // Create a single supabase client for interacting with your database
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = isValidUrl(supabaseUrl) 
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : {
+      // Provide a mock client when URL is invalid (for build time)
+      from: () => ({
+        select: () => ({ data: null, error: new Error('Invalid Supabase URL') }),
+        insert: () => ({ data: null, error: new Error('Invalid Supabase URL') }),
+        update: () => ({ data: null, error: new Error('Invalid Supabase URL') }),
+        delete: () => ({ data: null, error: new Error('Invalid Supabase URL') }),
+        eq: () => ({ data: null, error: new Error('Invalid Supabase URL') }),
+        order: () => ({ data: null, error: new Error('Invalid Supabase URL') }),
+        limit: () => ({ data: null, error: new Error('Invalid Supabase URL') }),
+      }),
+      channel: () => ({
+        on: () => ({ subscribe: () => {} }),
+        subscribe: () => {},
+      }),
+      auth: {
+        onAuthStateChange: () => ({ data: null, error: null }),
+        getSession: () => Promise.resolve({ data: { session: null }, error: null }),
+      },
+    };
 
 // Game state types
 export interface Player {
@@ -21,10 +52,10 @@ export interface GameState {
   phase: 'join' | 'waitingOdds' | 'countdown' | 'guessing' | 'result';
   countdown: number;
   result: {
-    guess1?: number;
-    guess2?: number;
-    oddsWon?: boolean;
-    message?: string;
+    guess1: number | null;
+    guess2: number | null;
+    oddsWon: boolean;
+    message: string;
   } | null;
 }
 

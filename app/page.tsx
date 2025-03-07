@@ -39,6 +39,7 @@ export default function Home() {
       // Subscribe to game state updates
       const gameStateSubscription = supabase
         .channel(GAME_CHANNEL)
+        // @ts-expect-error - Supabase types are not up to date
         .on('postgres_changes', { 
           event: 'INSERT', 
           schema: 'public', 
@@ -62,6 +63,7 @@ export default function Home() {
       // Subscribe to player-specific updates
       const playerSubscription = supabase
         .channel(PLAYER_CHANNEL)
+        // @ts-expect-error - Supabase types are not up to date
         .on('postgres_changes', { 
           event: 'INSERT', 
           schema: 'public', 

@@ -1,161 +1,176 @@
 import { NextResponse } from 'next/server';
-import * as Ably from 'ably';
 import type { NextRequest } from 'next/server';
+import { supabase, EVENTS, GAME_CHANNEL, PLAYER_CHANNEL, GameState, Player } from '@/lib/supabase';
 
-// Store for game state (note: this will reset on cold starts in serverless)
-let players: Array<{ clientId: string, name: string, odds: number | null, guess: number | null }> = [];
-let spectators: Array<{ clientId: string, name: string }> = [];
-
-// Helper function to remove a client
-function removeClient(clientId: string) {
-  players = players.filter((p) => p.clientId !== clientId);
-  spectators = spectators.filter((s) => s.clientId !== clientId);
-}
-
-// Initialize Ably client
-const getAblyClient = () => {
-  return new Ably.Realtime(process.env.ABLY_API_KEY as string);
+// In-memory game state (will reset on serverless cold starts)
+const gameState: GameState = {
+  players: [],
+  spectators: [],
+  phase: 'join',
+  countdown: 0,
+  result: null
 };
 
-// This is just a health check endpoint
+// Helper function to broadcast game state updates
+async function broadcastGameState() {
+  await supabase.from(GAME_CHANNEL).insert({
+    event: EVENTS.GAME_STATE_UPDATE,
+    payload: gameState
+  });
+}
+
+// Helper function to remove a player
+function removePlayer(playerId: string) {
+  gameState.players = gameState.players.filter(p => p.id !== playerId);
+  gameState.spectators = gameState.spectators.filter(s => s.id !== playerId);
+}
+
+// Health check endpoint
 export async function GET() {
   return NextResponse.json({ 
     status: 'Game server is running',
-    players: players.length,
-    spectators: spectators.length
+    players: gameState.players.length,
+    spectators: gameState.spectators.length,
+    phase: gameState.phase
   });
 }
 
 export async function POST(request: NextRequest) {
   try {
     const data = await request.json();
-    const { action, clientId, name, odds, guess } = data;
-    const client = getAblyClient();
-    const channel = client.channels.get('game-channel');
-
-    const publishMessage = (eventName: string, eventData: any) => {
-      return new Promise<void>((resolve, reject) => {
-        channel.publish(eventName, eventData, (err) => {
-          if (err) {
-            console.error(`Error publishing ${eventName}:`, err);
-            reject(err);
-          } else {
-            resolve();
-          }
-        });
-      });
-    };
+    const { action, playerId, name, odds, guess } = data;
 
     switch (action) {
       case 'join':
-        if (players.length < 2) {
-          // Add as a player if there is an available slot
-          players.push({
-            clientId,
+        if (gameState.players.length < 2) {
+          // Add as a player
+          const newPlayer: Player = {
+            id: playerId,
             name,
             odds: null,
-            guess: null,
+            guess: null
+          };
+          
+          gameState.players.push(newPlayer);
+          
+          // Notify the player of their role
+          await supabase.from(PLAYER_CHANNEL).insert({
+            event: EVENTS.ROLE_ASSIGNED,
+            payload: {
+              playerId,
+              role: 'player'
+            }
           });
           
-          // Notify the client of their role
-          await publishMessage('role', { 
-            clientId, 
-            role: 'player' 
-          });
+          // Update game state for all clients
+          await broadcastGameState();
           
-          // Notify all clients of the new player count
-          await publishMessage('userJoin', { 
-            playersCount: players.length 
-          });
-          
-          // When two players are connected, prompt them to set odds
-          if (players.length === 2) {
-            await publishMessage('waitingForOdds', {
-              message: 'Both players, please set your odds number.',
-            });
+          // If two players have joined, prompt for odds
+          if (gameState.players.length === 2) {
+            gameState.phase = 'waitingOdds';
+            await broadcastGameState();
           }
         } else {
-          // Otherwise, add as a spectator
-          spectators.push({
-            clientId,
-            name,
+          // Add as spectator
+          gameState.spectators.push({
+            id: playerId,
+            name
           });
           
-          // Notify the client of their role
-          await publishMessage('role', { 
-            clientId, 
-            role: 'spectator' 
+          // Notify the player of their role
+          await supabase.from(PLAYER_CHANNEL).insert({
+            event: EVENTS.ROLE_ASSIGNED,
+            payload: {
+              playerId,
+              role: 'spectator'
+            }
           });
+          
+          // Update game state for all clients
+          await broadcastGameState();
         }
         break;
         
       case 'setOdds':
-        const playerForOdds = players.find((p) => p.clientId === clientId);
+        const playerForOdds = gameState.players.find(p => p.id === playerId);
         if (playerForOdds) {
           playerForOdds.odds = odds;
           
-          // Check if both players have set their odds
-          const bothPlayersSetOdds = players.length === 2 && 
-                                    players[0].odds !== null && 
-                                    players[1].odds !== null;
+          // Check if both players have set odds
+          const bothPlayersSetOdds = 
+            gameState.players.length === 2 && 
+            gameState.players[0].odds !== null && 
+            gameState.players[1].odds !== null;
           
-          // Once both players have set their odds, start the countdown
           if (bothPlayersSetOdds) {
-            await publishMessage('startTimer', { countdown: 5 });
+            // Start countdown
+            gameState.phase = 'countdown';
+            gameState.countdown = 5;
+            await broadcastGameState();
             
-            // After 5 seconds, notify players to submit their guess
+            // After 5 seconds, move to guessing phase
             setTimeout(async () => {
-              await publishMessage('timerEnded', { 
-                message: 'Time to submit guess' 
-              });
+              gameState.phase = 'guessing';
+              await broadcastGameState();
             }, 5000);
+          } else {
+            // Just update the game state
+            await broadcastGameState();
           }
         }
         break;
         
       case 'submitGuess':
-        const playerForGuess = players.find((p) => p.clientId === clientId);
+        const playerForGuess = gameState.players.find(p => p.id === playerId);
         if (playerForGuess) {
           playerForGuess.guess = guess;
           
-          // If both players have submitted a guess, determine the result
-          if (players.length === 2 && players.every((p) => p.guess !== null)) {
-            // Get the guesses
-            const guess1 = players[0].guess;
-            const guess2 = players[1].guess;
-            
-            // Check if the guesses match (ODDS WON) or not (ODDS LOST)
+          // Check if both players have submitted guesses
+          const bothPlayersGuessed = 
+            gameState.players.length === 2 && 
+            gameState.players[0].guess !== null && 
+            gameState.players[1].guess !== null;
+          
+          if (bothPlayersGuessed) {
+            // Determine the result
+            const guess1 = gameState.players[0].guess;
+            const guess2 = gameState.players[1].guess;
             const oddsWon = guess1 === guess2;
             
-            // Broadcast the game result to all connected clients
-            await publishMessage('gameResult', { 
-              guess1, 
-              guess2, 
+            // Update game state with result
+            gameState.phase = 'result';
+            gameState.result = {
+              guess1,
+              guess2,
               oddsWon,
               message: oddsWon ? 'ODDS WON! Both guesses match!' : 'ODDS LOST! Guesses don\'t match.'
-            });
+            };
             
-            // Reset odds and guess for the next round
-            players.forEach((p) => {
-              p.odds = null;
-              p.guess = null;
-            });
+            await broadcastGameState();
             
-            // Prompt players to set odds for the next round
+            // Reset for next round after 5 seconds
             setTimeout(async () => {
-              await publishMessage('waitingForOdds', {
-                message: 'Both players, please set your odds number for the next round.',
+              // Reset player guesses and odds
+              gameState.players.forEach(p => {
+                p.odds = null;
+                p.guess = null;
               });
+              
+              gameState.phase = 'waitingOdds';
+              gameState.result = null;
+              
+              await broadcastGameState();
             }, 5000);
+          } else {
+            // Just update the game state
+            await broadcastGameState();
           }
         }
         break;
         
       case 'leave':
-        removeClient(clientId);
-        await publishMessage('userLeave', { 
-          playersCount: players.length 
-        });
+        removePlayer(playerId);
+        await broadcastGameState();
         break;
         
       default:
@@ -164,8 +179,7 @@ export async function POST(request: NextRequest) {
     
     return NextResponse.json({ 
       status: 'success',
-      players: players.length,
-      spectators: spectators.length
+      gameState
     });
   } catch (error) {
     console.error('Game state error:', error);
