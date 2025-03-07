@@ -76,7 +76,7 @@ export default function Home() {
         .subscribe();
       
       // Fetch initial game state
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from(GAME_CHANNEL)
         .select('payload')
         .eq('event', EVENTS.GAME_STATE_UPDATE)
@@ -133,7 +133,7 @@ export default function Home() {
   };
 
   // Game action handlers
-  const sendGameAction = async (action: string, data: Record<string, any> = {}) => {
+  const sendGameAction = async (action: string, data: Record<string, unknown> = {}) => {
     if (connectionStatus !== "Connected") {
       setConnectionError("Not connected to server. Please try reconnecting.");
       return;

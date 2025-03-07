@@ -33,6 +33,48 @@ This app uses Supabase for real-time functionality. Follow these steps to set up
    NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
    ```
 
+## Testing Locally
+
+Before deploying to production, it's important to test your Supabase integration locally:
+
+1. Copy `.env.local.example` to `.env.local` and add your Supabase credentials
+2. Run the Supabase test script to verify your connection:
+   ```bash
+   npm run test:supabase
+   ```
+3. The test script will:
+   - Verify connection to your Supabase project
+   - Test inserting data into the required tables
+   - Test querying data from the tables
+   - Test realtime subscriptions
+   
+4. If all tests pass, you're ready to run the full application:
+   ```bash
+   npm run dev
+   ```
+   
+5. For a complete test, open two browser windows and play against yourself:
+   - Open http://localhost:3000 in two different browsers or incognito windows
+   - Join as different players in each window
+   - Follow the game flow to verify everything works
+
+## Troubleshooting
+
+If the tests fail, check the following:
+
+1. **Connection Issues**:
+   - Verify your Supabase URL and anon key are correct
+   - Check that your Supabase project is active
+   
+2. **Table Creation Issues**:
+   - Make sure you've run the SQL migration script
+   - Check for any errors in the SQL Editor
+   
+3. **Realtime Issues**:
+   - Ensure Realtime is enabled in your Supabase project
+   - Go to Database > Replication > Realtime and make sure it's turned on
+   - Add the tables to the allowed tables list if necessary
+
 ## Deployment on Vercel
 
 This app is designed to be deployed on Vercel with zero configuration.
@@ -58,7 +100,7 @@ To run the app locally:
 npm install
 
 # Set up environment variables
-# Create a .env.local file with your Supabase credentials
+# Copy .env.local.example to .env.local and add your Supabase credentials
 
 # Run the development server
 npm run dev
