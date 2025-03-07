@@ -3,10 +3,12 @@
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { useState, useEffect, useCallback } from "react";
-import { io, Socket } from "socket.io-client";
+import * as Ably from 'ably';
 
 export default function Home() {
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const [ably, setAbly] = useState<Ably.Realtime | null>(null);
+  const [_channel, setChannel] = useState<any>(null);
+  const [clientId, setClientId] = useState<string>('');
   const [numUsers, setNumUsers] = useState(0);
   const [role, setRole] = useState<"player" | "spectator" | "none">("none");
   const [name, setName] = useState("");
@@ -23,141 +25,130 @@ export default function Home() {
   const [connectionStatus, setConnectionStatus] = useState("Connecting...");
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
-  // Initialize Socket.io connection
-  const initializeSocket = useCallback(async () => {
+  // Initialize Ably connection
+  const initializeAbly = useCallback(async () => {
     try {
       setConnectionStatus("Connecting...");
       setConnectionError(null);
       
-      // First, make a POST request to initialize the Socket.io server
-      const initResponse = await fetch('/api/socket', { 
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
+      // Generate a unique client ID
+      const newClientId = 'pch-odds-app-' + Math.random().toString(36).substring(2, 15);
+      setClientId(newClientId);
       
-      if (!initResponse.ok) {
-        const errorData = await initResponse.json();
-        console.error('Failed to initialize socket server:', errorData);
+      // Get token from our API
+      const tokenResponse = await fetch('/api/ably-token');
+      if (!tokenResponse.ok) {
+        const errorData = await tokenResponse.json();
         setConnectionStatus("Failed to connect");
-        setConnectionError(`Server error: ${errorData.error || 'Unknown error'}`);
+        setConnectionError(`Token error: ${errorData.error || 'Unknown error'}`);
         return;
       }
       
-      // Determine the socket URL and options
-      const socketUrl = window.location.origin;
-      const socketOptions = {
-        path: '/api/socket',
-        transports: ['websocket', 'polling'],
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000
-      };
+      const tokenData = await tokenResponse.json();
       
-      console.log(`Connecting to socket at ${socketUrl}`, socketOptions);
+      // Initialize Ably with the token
+      const ablyInstance = new Ably.Realtime({ 
+        authCallback: async (_, callback) => {
+          callback(null, tokenData);
+        },
+        clientId: newClientId
+      });
       
-      // Create the socket connection
-      const usedSocket = io(socketUrl, socketOptions);
-      
-      // Set up event handlers
-      usedSocket.on("connect", () => {
-        console.log("Connected to server with ID:", usedSocket.id);
+      // Set up connection state change handler
+      ablyInstance.connection.on('connected', () => {
+        console.log('Connected to Ably');
         setConnectionStatus("Connected");
         setConnectionError(null);
       });
       
-      usedSocket.on("connect_error", (err) => {
-        console.error("Connection error:", err);
-        setConnectionStatus("Connection error");
-        setConnectionError(`${err.message}`);
+      ablyInstance.connection.on('failed', (err: any) => {
+        console.error('Ably connection failed:', err);
+        setConnectionStatus("Connection failed");
+        setConnectionError(err.message || 'Connection failed');
       });
-
-      usedSocket.on("disconnect", (reason) => {
-        console.log("Disconnected from server:", reason);
-        setConnectionStatus(`Disconnected: ${reason}`);
+      
+      ablyInstance.connection.on('disconnected', () => {
+        console.log('Disconnected from Ably');
+        setConnectionStatus("Disconnected");
       });
-
-      // Server assigns a role to the connection
-      usedSocket.on("role", (data) => {
-        console.log("Assigned role:", data.role);
-        setRole(data.role);
-        if (data.role === "player") {
-          setGamePhase("waitingOdds");
-        } else {
-          setGamePhase("spectate");
+      
+      // Subscribe to the game channel
+      const gameChannel = ablyInstance.channels.get('game-channel');
+      
+      // Set up event handlers
+      gameChannel.subscribe('role', (message) => {
+        // Only process messages intended for this client
+        if (message.data.clientId === newClientId) {
+          console.log("Assigned role:", message.data.role);
+          setRole(message.data.role);
+          if (message.data.role === "player") {
+            setGamePhase("waitingOdds");
+          } else {
+            setGamePhase("spectate");
+          }
         }
       });
-
-      usedSocket.on("userJoin", (data) => {
-        console.log("User joined, player count:", data.playersCount);
-        setNumUsers(data.playersCount);
+      
+      gameChannel.subscribe('userJoin', (message) => {
+        console.log("User joined, player count:", message.data.playersCount);
+        setNumUsers(message.data.playersCount);
       });
-
-      usedSocket.on("userLeave", (data) => {
-        console.log("User left, player count:", data.playersCount);
-        setNumUsers(data.playersCount);
+      
+      gameChannel.subscribe('userLeave', (message) => {
+        console.log("User left, player count:", message.data.playersCount);
+        setNumUsers(message.data.playersCount);
       });
-
-      // Tells players to set odds
-      usedSocket.on("waitingForOdds", (data) => {
-        console.log("Waiting for odds:", data.message);
+      
+      gameChannel.subscribe('waitingForOdds', (message) => {
+        console.log("Waiting for odds:", message.data.message);
         setGamePhase("waitingOdds");
       });
-
-      // When both players have submitted odds, the server starts a 5-second timer.
-      usedSocket.on("startTimer", (data) => {
-        console.log("Starting countdown:", data.countdown);
-        setCountdown(data.countdown);
+      
+      gameChannel.subscribe('startTimer', (message) => {
+        console.log("Starting countdown:", message.data.countdown);
+        setCountdown(message.data.countdown);
         setGamePhase("countdown");
       });
-
-      // After timer completes, players can submit their guess.
-      usedSocket.on("timerEnded", (data) => {
-        console.log("Timer ended, time to guess:", data.message);
+      
+      gameChannel.subscribe('timerEnded', (message) => {
+        console.log("Timer ended, time to guess:", message.data.message);
         setGamePhase("guessing");
       });
-
-      // Game result is broadcast once both players have guessed.
-      usedSocket.on("gameResult", (data) => {
-        console.log("Game result received:", data);
-        setResult(data);
+      
+      gameChannel.subscribe('gameResult', (message) => {
+        console.log("Game result received:", message.data);
+        setResult(message.data);
         setGamePhase("result");
       });
-
-      setSocket(usedSocket);
       
-      // Return a cleanup function
+      setAbly(ablyInstance);
+      setChannel(gameChannel);
+      
       return () => {
-        console.log("Cleaning up socket connection");
-        usedSocket.disconnect();
+        console.log("Cleaning up Ably connection");
+        gameChannel.unsubscribe();
+        ablyInstance.close();
       };
     } catch (error) {
-      console.error("Socket initialization error:", error);
+      console.error("Ably initialization error:", error);
       setConnectionStatus("Failed to connect");
       setConnectionError(`${error}`);
-      return undefined; // Return undefined instead of null
+      return undefined;
     }
   }, []);
 
-  // Initialize socket on component mount
+  // Initialize Ably on component mount
   useEffect(() => {
-    const cleanupFn = initializeSocket();
-    
-    // Handle player leaving when role changes
-    if (role === "player" && socket) {
-      socket.on("userLeave", () => {
-        setGamePhase("waitingOdds");
-      });
-    }
+    const cleanupFn = initializeAbly();
     
     return () => {
-      // Use Promise.resolve to handle both Promise and function returns
       Promise.resolve(cleanupFn).then(cleanup => {
         if (typeof cleanup === 'function') {
           cleanup();
         }
       });
     };
-  }, [initializeSocket, role, socket]);
+  }, [initializeAbly]);
 
   // Countdown timer (updates every second)
   useEffect(() => {
@@ -178,41 +169,67 @@ export default function Home() {
 
   // Handle reconnection
   const handleReconnect = () => {
-    if (socket) {
-      socket.disconnect();
+    if (ably) {
+      ably.close();
     }
-    initializeSocket();
+    initializeAbly();
+  };
+
+  // Game action handlers
+  const sendGameAction = async (action: string, data: Record<string, any> = {}) => {
+    if (connectionStatus !== "Connected") {
+      setConnectionError("Not connected to server. Please try reconnecting.");
+      return;
+    }
+    
+    try {
+      const response = await fetch('/api/game-state', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action,
+          clientId,
+          ...data
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error(`Error sending ${action}:`, errorData);
+        setConnectionError(`Error: ${errorData.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error(`Error sending ${action}:`, error);
+      setConnectionError(`Error: ${error}`);
+    }
   };
 
   const handleJoin = () => {
-    if (name.trim() !== "" && socket && socket.connected) {
+    if (name.trim() !== "" && connectionStatus === "Connected") {
       console.log("Joining game as:", name);
-      socket.emit("join", { name });
-    } else if (!socket || !socket.connected) {
-      setConnectionError("Not connected to server. Please try reconnecting.");
+      sendGameAction('join', { name });
     }
   };
 
   const handleSetOdds = () => {
-    if (odds.trim() !== "" && socket && socket.connected) {
+    if (odds.trim() !== "" && connectionStatus === "Connected") {
       const oddsNumber = Number(odds);
       console.log("Setting odds:", oddsNumber);
-      socket.emit("setOdds", { odds: oddsNumber });
-    } else if (!socket || !socket.connected) {
-      setConnectionError("Not connected to server. Please try reconnecting.");
+      sendGameAction('setOdds', { odds: oddsNumber });
     }
   };
 
   const handleSubmitGuess = () => {
-    if (guess.trim() !== "" && socket && socket.connected) {
+    if (guess.trim() !== "" && connectionStatus === "Connected") {
       const guessNumber = Number(guess);
       console.log("Submitting guess:", guessNumber);
-      socket.emit("submitGuess", { guess: guessNumber });
-    } else if (!socket || !socket.connected) {
-      setConnectionError("Not connected to server. Please try reconnecting.");
+      sendGameAction('submitGuess', { guess: guessNumber });
     }
   };
 
+  // UI Components
   const renderConnectionStatus = () => (
     <div className="text-sm mb-4">
       <div className="flex items-center gap-2">
