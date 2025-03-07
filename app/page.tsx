@@ -2,7 +2,7 @@
 
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 
 export default function Home() {
@@ -20,153 +20,144 @@ export default function Home() {
     message?: string;
   } | null>(null);
   const [countdown, setCountdown] = useState(0);
-  const [connectionStatus, setConnectionStatus] = useState("Disconnected");
+  const [connectionStatus, setConnectionStatus] = useState("Connecting...");
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Determine the socket URL based on the environment
-    const socketUrl = process.env.NODE_ENV === 'production'
-      ? `${window.location.origin}/api/socket` // Production URL
-      : 'http://localhost:3001'; // Development URL
-
-    const socketOptions = process.env.NODE_ENV === 'production'
-      ? { path: '/api/socket' } // Production options
-      : {}; // Development options
-
-    console.log(`Connecting to socket at ${socketUrl}`, socketOptions);
-    
-    const usedSocket = io(socketUrl, socketOptions);
-
-    usedSocket.on("connect", () => {
-      console.log("connected to server");
-      setConnectionStatus("Connected");
-    });
-
-    usedSocket.on("disconnect", () => {
-      console.log("disconnected from server");
-      setConnectionStatus("Disconnected");
-    });
-
-    // Server assigns a role to the connection
-    usedSocket.on("role", (data) => {
-      console.log("assigned role:", data.role);
-      setRole(data.role);
-      if (data.role === "player") {
-        setGamePhase("waitingOdds");
-      } else {
-        setGamePhase("spectate");
+  // Initialize Socket.io connection
+  const initializeSocket = useCallback(async () => {
+    try {
+      setConnectionStatus("Connecting...");
+      setConnectionError(null);
+      
+      // First, make a POST request to initialize the Socket.io server
+      const initResponse = await fetch('/api/socket', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      if (!initResponse.ok) {
+        const errorData = await initResponse.json();
+        console.error('Failed to initialize socket server:', errorData);
+        setConnectionStatus("Failed to connect");
+        setConnectionError(`Server error: ${errorData.error || 'Unknown error'}`);
+        return;
       }
-    });
+      
+      // Determine the socket URL and options
+      const socketUrl = window.location.origin;
+      const socketOptions = {
+        path: '/api/socket',
+        transports: ['websocket', 'polling'],
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000
+      };
+      
+      console.log(`Connecting to socket at ${socketUrl}`, socketOptions);
+      
+      // Create the socket connection
+      const usedSocket = io(socketUrl, socketOptions);
+      
+      // Set up event handlers
+      usedSocket.on("connect", () => {
+        console.log("Connected to server with ID:", usedSocket.id);
+        setConnectionStatus("Connected");
+        setConnectionError(null);
+      });
+      
+      usedSocket.on("connect_error", (err) => {
+        console.error("Connection error:", err);
+        setConnectionStatus("Connection error");
+        setConnectionError(`${err.message}`);
+      });
 
-    usedSocket.on("userJoin", (data) => {
-      console.log("User joined, player count:", data.playersCount);
-      setNumUsers(data.playersCount);
-    });
+      usedSocket.on("disconnect", (reason) => {
+        console.log("Disconnected from server:", reason);
+        setConnectionStatus(`Disconnected: ${reason}`);
+      });
 
-    usedSocket.on("userLeave", (data) => {
-      console.log("User left, player count:", data.playersCount);
-      setNumUsers(data.playersCount);
-    });
+      // Server assigns a role to the connection
+      usedSocket.on("role", (data) => {
+        console.log("Assigned role:", data.role);
+        setRole(data.role);
+        if (data.role === "player") {
+          setGamePhase("waitingOdds");
+        } else {
+          setGamePhase("spectate");
+        }
+      });
 
-    // Tells players to set odds
-    usedSocket.on("waitingForOdds", (data) => {
-      console.log("Waiting for odds:", data.message);
-      setGamePhase("waitingOdds");
-    });
+      usedSocket.on("userJoin", (data) => {
+        console.log("User joined, player count:", data.playersCount);
+        setNumUsers(data.playersCount);
+      });
 
-    // When both players have submitted odds, the server starts a 5-second timer.
-    usedSocket.on("startTimer", (data) => {
-      console.log("Starting countdown:", data.countdown);
-      setCountdown(data.countdown);
-      setGamePhase("countdown");
-    });
+      usedSocket.on("userLeave", (data) => {
+        console.log("User left, player count:", data.playersCount);
+        setNumUsers(data.playersCount);
+      });
 
-    // After timer completes, players can submit their guess.
-    usedSocket.on("timerEnded", (data) => {
-      console.log("Timer ended, time to guess:", data.message);
-      setGamePhase("guessing");
-    });
+      // Tells players to set odds
+      usedSocket.on("waitingForOdds", (data) => {
+        console.log("Waiting for odds:", data.message);
+        setGamePhase("waitingOdds");
+      });
 
-    // Game result is broadcast once both players have guessed.
-    usedSocket.on("gameResult", (data) => {
-      console.log("Game result received:", data);
-      setResult(data);
-      setGamePhase("result");
-    });
+      // When both players have submitted odds, the server starts a 5-second timer.
+      usedSocket.on("startTimer", (data) => {
+        console.log("Starting countdown:", data.countdown);
+        setCountdown(data.countdown);
+        setGamePhase("countdown");
+      });
 
-    setSocket(usedSocket);
+      // After timer completes, players can submit their guess.
+      usedSocket.on("timerEnded", (data) => {
+        console.log("Timer ended, time to guess:", data.message);
+        setGamePhase("guessing");
+      });
 
-    // Cleanup on unmount
-    return () => {
-      usedSocket.disconnect();
-    };
-  }, []); // Empty dependency array as we only want to run this once
+      // Game result is broadcast once both players have guessed.
+      usedSocket.on("gameResult", (data) => {
+        console.log("Game result received:", data);
+        setResult(data);
+        setGamePhase("result");
+      });
 
-  // Handle player leaving when role changes
+      setSocket(usedSocket);
+      
+      // Return a cleanup function
+      return () => {
+        console.log("Cleaning up socket connection");
+        usedSocket.disconnect();
+      };
+    } catch (error) {
+      console.error("Socket initialization error:", error);
+      setConnectionStatus("Failed to connect");
+      setConnectionError(`${error}`);
+      return undefined; // Return undefined instead of null
+    }
+  }, []);
+
+  // Initialize socket on component mount
   useEffect(() => {
+    const cleanupFn = initializeSocket();
+    
+    // Handle player leaving when role changes
     if (role === "player" && socket) {
-      // If a player leaves, reset the game phase for players.
       socket.on("userLeave", () => {
         setGamePhase("waitingOdds");
       });
     }
-  }, [role, socket]);
-
-  const handleJoin = () => {
-    if (name.trim() !== "" && socket) {
-      console.log("Joining game as:", name);
-      socket.emit("join", { name });
-    }
-  };
-
-  const handleSetOdds = () => {
-    if (odds.trim() !== "" && socket) {
-      const oddsNumber = Number(odds);
-      console.log("Setting odds:", oddsNumber);
-      socket.emit("setOdds", { odds: oddsNumber });
-    }
-  };
-
-  const handleSubmitGuess = () => {
-    if (guess.trim() !== "" && socket) {
-      const guessNumber = Number(guess);
-      console.log("Submitting guess:", guessNumber);
-      socket.emit("submitGuess", { guess: guessNumber });
-    }
-  };
-
-  const renderJoin = () => (
-    <div className="flex flex-col gap-4">
-      <Input
-        placeholder="Enter your name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-      <Button onClick={handleJoin}>Join Game</Button>
-    </div>
-  );
-
-  const renderWaitingOdds = () => (
-    <div className="flex flex-col gap-4">
-      <p>
-        Waiting for both players. Enter an odds number and click start when
-        ready.
-      </p>
-      <Input
-        placeholder="Enter odds number"
-        value={odds}
-        onChange={(e) => setOdds(e.target.value)}
-        type="number"
-      />
-      <Button onClick={handleSetOdds}>Set Odds & Start Timer</Button>
-    </div>
-  );
-
-  const renderCountdown = () => (
-    <div className="text-center">
-      <p className="text-2xl font-bold">Game starting in: {countdown} seconds</p>
-      <p>Get ready to make your guess!</p>
-    </div>
-  );
+    
+    return () => {
+      // Use Promise.resolve to handle both Promise and function returns
+      Promise.resolve(cleanupFn).then(cleanup => {
+        if (typeof cleanup === 'function') {
+          cleanup();
+        }
+      });
+    };
+  }, [initializeSocket, role, socket]);
 
   // Countdown timer (updates every second)
   useEffect(() => {
@@ -185,6 +176,113 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [gamePhase, countdown]);
 
+  // Handle reconnection
+  const handleReconnect = () => {
+    if (socket) {
+      socket.disconnect();
+    }
+    initializeSocket();
+  };
+
+  const handleJoin = () => {
+    if (name.trim() !== "" && socket && socket.connected) {
+      console.log("Joining game as:", name);
+      socket.emit("join", { name });
+    } else if (!socket || !socket.connected) {
+      setConnectionError("Not connected to server. Please try reconnecting.");
+    }
+  };
+
+  const handleSetOdds = () => {
+    if (odds.trim() !== "" && socket && socket.connected) {
+      const oddsNumber = Number(odds);
+      console.log("Setting odds:", oddsNumber);
+      socket.emit("setOdds", { odds: oddsNumber });
+    } else if (!socket || !socket.connected) {
+      setConnectionError("Not connected to server. Please try reconnecting.");
+    }
+  };
+
+  const handleSubmitGuess = () => {
+    if (guess.trim() !== "" && socket && socket.connected) {
+      const guessNumber = Number(guess);
+      console.log("Submitting guess:", guessNumber);
+      socket.emit("submitGuess", { guess: guessNumber });
+    } else if (!socket || !socket.connected) {
+      setConnectionError("Not connected to server. Please try reconnecting.");
+    }
+  };
+
+  const renderConnectionStatus = () => (
+    <div className="text-sm mb-4">
+      <div className="flex items-center gap-2">
+        <div className={`w-3 h-3 rounded-full ${
+          connectionStatus === "Connected" ? "bg-green-500" : 
+          connectionStatus === "Connecting..." ? "bg-yellow-500" : "bg-red-500"
+        }`}></div>
+        <span>Status: {connectionStatus} | Players: {numUsers}/2</span>
+      </div>
+      {connectionError && (
+        <div className="text-red-500 mt-1 text-xs">{connectionError}</div>
+      )}
+      {connectionStatus !== "Connected" && (
+        <Button 
+          onClick={handleReconnect} 
+          className="mt-2 text-xs py-1 px-2 h-auto"
+          variant="outline"
+        >
+          Reconnect
+        </Button>
+      )}
+    </div>
+  );
+
+  const renderJoin = () => (
+    <div className="flex flex-col gap-4">
+      <Input
+        placeholder="Enter your name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        disabled={connectionStatus !== "Connected"}
+      />
+      <Button 
+        onClick={handleJoin}
+        disabled={connectionStatus !== "Connected" || !name.trim()}
+      >
+        Join Game
+      </Button>
+    </div>
+  );
+
+  const renderWaitingOdds = () => (
+    <div className="flex flex-col gap-4">
+      <p>
+        Waiting for both players. Enter an odds number and click start when
+        ready.
+      </p>
+      <Input
+        placeholder="Enter odds number"
+        value={odds}
+        onChange={(e) => setOdds(e.target.value)}
+        type="number"
+        disabled={connectionStatus !== "Connected"}
+      />
+      <Button 
+        onClick={handleSetOdds}
+        disabled={connectionStatus !== "Connected" || !odds.trim()}
+      >
+        Set Odds & Start Timer
+      </Button>
+    </div>
+  );
+
+  const renderCountdown = () => (
+    <div className="text-center">
+      <p className="text-2xl font-bold">Game starting in: {countdown} seconds</p>
+      <p>Get ready to make your guess!</p>
+    </div>
+  );
+
   const renderGuess = () => (
     <div className="flex flex-col gap-4">
       <p className="text-xl font-bold">Time to submit your guess number:</p>
@@ -194,8 +292,14 @@ export default function Home() {
         value={guess}
         onChange={(e) => setGuess(e.target.value)}
         type="number"
+        disabled={connectionStatus !== "Connected"}
       />
-      <Button onClick={handleSubmitGuess}>Submit Guess</Button>
+      <Button 
+        onClick={handleSubmitGuess}
+        disabled={connectionStatus !== "Connected" || !guess.trim()}
+      >
+        Submit Guess
+      </Button>
     </div>
   );
 
@@ -222,7 +326,7 @@ export default function Home() {
   return (
     <div className="mx-auto flex flex-col items-center justify-center min-h-screen gap-6 p-4">
       <h1 className="text-3xl font-bold mb-4">PCH Odds Game</h1>
-      <div className="text-sm mb-2">Status: {connectionStatus} | Players: {numUsers}/2</div>
+      {renderConnectionStatus()}
       
       {gamePhase === "join" && renderJoin()}
       {role === "player" && gamePhase === "waitingOdds" && renderWaitingOdds()}
