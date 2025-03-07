@@ -78,15 +78,20 @@ export default function Home() {
         .subscribe();
       
       // Fetch initial game state
-      const { data } = await supabase
-        .from(GAME_CHANNEL)
-        .select('payload')
-        .eq('event', EVENTS.GAME_STATE_UPDATE)
-        .order('created_at', { ascending: false })
-        .limit(1);
-      
-      if (data && data.length > 0) {
-        setGameState(data[0].payload);
+      try {
+        // @ts-expect-error - Supabase types are not up to date
+        const { data } = await supabase
+          .from(GAME_CHANNEL)
+          .select('payload')
+          .eq('event', EVENTS.GAME_STATE_UPDATE)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        
+        if (data && data.length > 0) {
+          setGameState(data[0].payload);
+        }
+      } catch (error) {
+        console.error('Error fetching initial game state:', error);
       }
       
       // Return cleanup function
