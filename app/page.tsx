@@ -48,7 +48,7 @@ export default function Home() {
       
       // Initialize Ably with the token
       const ablyInstance = new Ably.Realtime({ 
-        authCallback: async (_, callback) => {
+        authCallback: (_, callback) => {
           callback(null, tokenData);
         },
         clientId: newClientId
@@ -61,7 +61,7 @@ export default function Home() {
         setConnectionError(null);
       });
       
-      ablyInstance.connection.on('failed', (err: any) => {
+      ablyInstance.connection.on('failed', (err) => {
         console.error('Ably connection failed:', err);
         setConnectionStatus("Connection failed");
         setConnectionError(err.message || 'Connection failed');

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import Ably from 'ably/promises';
+import * as Ably from 'ably';
 import type { NextRequest } from 'next/server';
 
 // Store for game state (note: this will reset on cold starts in serverless)
@@ -14,7 +14,7 @@ function removeClient(clientId: string) {
 
 // Initialize Ably client
 const getAblyClient = () => {
-  return new Ably.Rest(process.env.ABLY_API_KEY as string);
+  return new Ably.Realtime(process.env.ABLY_API_KEY as string);
 };
 
 // This is just a health check endpoint
@@ -33,6 +33,19 @@ export async function POST(request: NextRequest) {
     const client = getAblyClient();
     const channel = client.channels.get('game-channel');
 
+    const publishMessage = (eventName: string, eventData: any) => {
+      return new Promise<void>((resolve, reject) => {
+        channel.publish(eventName, eventData, (err) => {
+          if (err) {
+            console.error(`Error publishing ${eventName}:`, err);
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
+    };
+
     switch (action) {
       case 'join':
         if (players.length < 2) {
@@ -45,19 +58,19 @@ export async function POST(request: NextRequest) {
           });
           
           // Notify the client of their role
-          await channel.publish('role', { 
+          await publishMessage('role', { 
             clientId, 
             role: 'player' 
           });
           
           // Notify all clients of the new player count
-          await channel.publish('userJoin', { 
+          await publishMessage('userJoin', { 
             playersCount: players.length 
           });
           
           // When two players are connected, prompt them to set odds
           if (players.length === 2) {
-            await channel.publish('waitingForOdds', {
+            await publishMessage('waitingForOdds', {
               message: 'Both players, please set your odds number.',
             });
           }
@@ -69,7 +82,7 @@ export async function POST(request: NextRequest) {
           });
           
           // Notify the client of their role
-          await channel.publish('role', { 
+          await publishMessage('role', { 
             clientId, 
             role: 'spectator' 
           });
@@ -88,11 +101,11 @@ export async function POST(request: NextRequest) {
           
           // Once both players have set their odds, start the countdown
           if (bothPlayersSetOdds) {
-            await channel.publish('startTimer', { countdown: 5 });
+            await publishMessage('startTimer', { countdown: 5 });
             
             // After 5 seconds, notify players to submit their guess
             setTimeout(async () => {
-              await channel.publish('timerEnded', { 
+              await publishMessage('timerEnded', { 
                 message: 'Time to submit guess' 
               });
             }, 5000);
@@ -115,7 +128,7 @@ export async function POST(request: NextRequest) {
             const oddsWon = guess1 === guess2;
             
             // Broadcast the game result to all connected clients
-            await channel.publish('gameResult', { 
+            await publishMessage('gameResult', { 
               guess1, 
               guess2, 
               oddsWon,
@@ -130,7 +143,7 @@ export async function POST(request: NextRequest) {
             
             // Prompt players to set odds for the next round
             setTimeout(async () => {
-              await channel.publish('waitingForOdds', {
+              await publishMessage('waitingForOdds', {
                 message: 'Both players, please set your odds number for the next round.',
               });
             }, 5000);
@@ -140,7 +153,7 @@ export async function POST(request: NextRequest) {
         
       case 'leave':
         removeClient(clientId);
-        await channel.publish('userLeave', { 
+        await publishMessage('userLeave', { 
           playersCount: players.length 
         });
         break;
