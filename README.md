@@ -1,36 +1,61 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PCH Odds Game
 
-## Getting Started
+A real-time multiplayer game where players set odds and make guesses. If both players guess the same number, ODDS WIN!
 
-First, run the development server:
+## Features
+
+- Real-time multiplayer gameplay using Socket.io
+- Support for up to 2 active players and unlimited spectators
+- Countdown timer between game phases
+- Responsive design
+
+## How to Play
+
+1. Enter your name and join the game
+2. First two players become active players, others become spectators
+3. Both players set an "odds" number
+4. After a 5-second countdown, players make their guesses
+5. If both players guess the same number, ODDS WIN!
+6. If guesses are different, ODDS LOSE
+7. Game automatically resets for the next round
+
+## Deployment on Vercel
+
+This app is designed to be deployed on Vercel with zero configuration. The backend Socket.io server runs as a serverless function.
+
+### Deploy Your Own
+
+Deploy your own version of this app to Vercel with one click:
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fyourusername%2Fpch-odds-app)
+
+### Manual Deployment Steps
+
+1. Push your code to a GitHub repository
+2. Go to [Vercel](https://vercel.com) and sign up or log in
+3. Click "New Project" and import your GitHub repository
+4. Keep all default settings and click "Deploy"
+5. Wait for the deployment to complete
+6. Your app is now live at your Vercel URL!
+
+## Local Development
+
+To run the app locally:
 
 ```bash
+# Install dependencies
+npm install
+
+# Run the development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in your browser to see the app.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Technologies Used
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Next.js 15
+- React 19
+- Socket.io
+- TypeScript
+- Tailwind CSS
